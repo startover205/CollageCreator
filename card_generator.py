@@ -2,7 +2,6 @@ import cv2 as cv
 import os
 from pptx import Presentation
 from pptx.util import Cm
-import shutil
 import datetime
 
 
@@ -38,6 +37,18 @@ def scale_to_area(img, target_area):
     result_w = img_w * ratio
     result_h = img_h * ratio
     return cv.resize(img, (int(result_w), int(result_h)))
+
+
+def cm_width(img):
+    return Cm(img.shape[1] / Cm(1).pt)
+
+
+def cm_height(img):
+    return Cm(img.shape[0] / Cm(1).pt)
+
+
+def cm(pt):
+    return  Cm(pt/ Cm(1).pt)
 
 
 if __name__ == '__main__':
@@ -93,7 +104,7 @@ if __name__ == '__main__':
                     continue
             for extension in unsupported_extensions:
                 if filename.endswith(extension.lower()) or filename.endswith(extension.upper()):
-                     raise Exception(f"Found file with unsupported extension: {extension}")
+                    raise Exception(f"Found file with unsupported extension: {extension}")
 
     print(img_target)
 
@@ -102,16 +113,16 @@ if __name__ == '__main__':
 
     source_images = img_target.copy()
 
-    rows = []
-    row = []
-    for _ in range(len(img_target)):
-        row.append(img_target.pop())
-        if len(row) == 3:
-            rows.append(row)
-            row = []
+    # rows = []
+    # row = []
+    # for _ in range(len(img_target)):
+    #     row.append(img_target.pop())
+    #     if len(row) == 3:
+    #         rows.append(row)
+    #         row = []
 
-    if len(row):
-        rows.append(row)
+    # if len(row):
+    #     rows.append(row)
 
     # 縮放圖片
     area = Cm(6).pt * Cm(6).pt
@@ -122,70 +133,84 @@ if __name__ == '__main__':
     prs.slide_height = Cm(21)
     blank_slide_layout = prs.slide_layouts[6]
 
-    upper_padding = Cm(0)
-    lower_padding = Cm(0)
-    col_spacing = Cm(9.9)
-    left_x = Cm(0)
+    # 算出所有圖片的寬高比、按照大小排列、統一轉成垂直圖片
 
-    imagelist = []
-    row_count = len(rows)
-    r = row_count//2 if row_count%2 == 0 else row_count//2+1
-    for i in range(r): # 0, 1, ... , 24
-        slide = prs.slides.add_slide(blank_slide_layout)
+    # 將紙張橫向放置，讓圖卡由寬高比低開始排列，有上而下，超過高度邊界則換行，再繼續由下而上，反覆來回，直到超過寬度邊界再換紙
+    temp_fn = 'temp.jpg'
 
-        upper_images = rows[i*2]
-        lower_images = rows[i*2+1] if i*2+1 < len(rows) else None
+    items = []
+    for image in img_target:
+        im = cv.imread(image, cv.IMREAD_IGNORE_ORIENTATION+cv.IMREAD_COLOR)
 
-        upper_row_padding = 40
-        lower_row_padding = 40
+        resized = scale_to_area(im, area)
+        width = resized.shape[1]
+        height = resized.shape[0]
+        if width > height:
+            resized = cv.rotate(resized, cv.ROTATE_90_CLOCKWISE)
+            im = cv.rotate(im, cv.ROTATE_90_CLOCKWISE)
+            items.append((im, height, width))
+        else :
+            items.append((im, width, height))
 
-        # 評分 padding
-        # x_upper = upper_row_padding
-        x = left_x
-        for index, image in enumerate(upper_images):
-            im = cv.imread(image, cv.IMREAD_IGNORE_ORIENTATION)
 
-            resized = scale_to_area(im, area)
-            width = Cm(resized.shape[1] / Cm(1).pt)
-            height = Cm(resized.shape[0] / Cm(1).pt)
+            # resized = rotate(resized, 90)
 
-            # x = Cm(x_upper / Cm(1).pt)
-            y = upper_padding
+        # images.append(im, width, height)
 
-            # 最後一張靠右
-            if index == len(upper_images) - 1:
-                x = prs.slide_width - width
+    # sort by width
+    items = sorted(items, key=lambda item: item[1])
 
-            img = slide.shapes.add_picture(image, x, y, width=width, height=height)
-            # x_upper += resized.shape[1] + upper_row_padding
-            x += col_spacing
+    # for image in imagelist:
+    #     print(image.shape[1])
 
-        if lower_images:
-            x = left_x
-            # x_lower = lower_row_padding
-            for index, image in enumerate(lower_images):
-                im = cv.imread(image, cv.IMREAD_IGNORE_ORIENTATION)
+    last_width = Cm(0)
+    max_height = None
+    top_margin = left_margin = bottom_margin = right_margin = Cm(1)
+    horizontal_padding = vertical_padding = Cm(1)
+    # col_spacing = Cm(9.9)
+    # left_x = Cm(0)
 
-                resized = scale_to_area(im, area)
-                width = Cm(resized.shape[1] / Cm(1).pt)
-                height = Cm(resized.shape[0] / Cm(1).pt)
+    # last_height = Cm(0)
+    x = left_margin
+    y = top_margin
+    slide = prs.slides.add_slide(blank_slide_layout)
+    for item in items:
+        width = cm(item[1])
+        height = cm(item[2])
 
-                # x = Cm(x_lower / Cm(1).pt)
-                y = Cm(prs.slide_height.cm - height.cm - lower_padding.cm)
+        # 確認不會超出紙張高度，超出就換列
+        if y + height + bottom_margin > prs.slide_height:
+            y = top_margin
+            x += horizontal_padding
+            x += last_width
 
-                # 最後一張靠右
-                if index == len(upper_images) - 1:
-                    x = prs.slide_width - width
+            # 如果換行後，超出紙張寬度，則建立新的紙張
+            if x + width + right_margin > prs.slide_width:
+                slide = prs.slides.add_slide(blank_slide_layout)
+                x = left_margin
+                max_height = None
 
-                img = slide.shapes.add_picture(image, x, y, width=width, height=height)
-                # x_lower += resized.shape[1] + lower_row_padding
-                x += col_spacing
+        # 紀錄此張投影片最大高度圖片
+        if max_height is None:
+            max_height = height
 
+        cv.imwrite(temp_fn, item[0])
+        a = slide.shapes.add_picture(temp_fn, x, y, width=width, height=height)
+        last_width = width
+        # last_height = height
+
+        y += max_height
+        y += vertical_padding
+
+    # 刪除暫存
+    os.remove("temp.jpg")
+
+    # 輸出 ppt
     now = datetime.datetime.now().strftime("%m%d-%H%M")
 
     prs.save(f"{output_folder}/{now}.pptx")  # saving file
 
     # 移動完成 source 到 done 資料夾
     # for image in source_images:
-    #     target = f"{done}/{os.path.basename(image)}"
+    #     target = f"{done}/{os.path.rbasename(image)}"
     #     shutil.move(image, target)
